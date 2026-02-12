@@ -1,0 +1,5 @@
+./gomath
+uploads
+web/dist
+web/node_modules
+config/models.yaml
