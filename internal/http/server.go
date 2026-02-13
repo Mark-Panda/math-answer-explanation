@@ -51,6 +51,7 @@ func NewServer(uploadDir string, maxSizeMB int, ocr OCRRecognizer, explainGen Ex
 		r.Get("/history", s.handleHistoryList)
 		r.Post("/history", s.handleHistoryCreate)
 		r.Patch("/history/{id}", s.handleHistoryUpdateResult)
+		r.Delete("/history/{id}", s.handleHistoryDelete)
 	})
 	return s
 }

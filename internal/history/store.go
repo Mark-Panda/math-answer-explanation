@@ -157,6 +157,22 @@ func (s *Store) UpdateResult(id string, result *Result, taskID string) bool {
 	return false
 }
 
+// Delete 按 id 删除一条历史
+func (s *Store) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, it := range s.items {
+		if it != nil && it.ID == id {
+			s.items = append(s.items[:i], s.items[i+1:]...)
+			if err := s.save(); err != nil {
+				log.Printf("[history] save after Delete: %v", err)
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // FindLatestUploadByPath 返回同 path 最新一条（用于当前上传后解析时关联）
 func (s *Store) FindLatestUploadByPath(path string) *Item {
 	s.mu.RLock()

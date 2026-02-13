@@ -13,6 +13,7 @@ type HistoryStore interface {
 	List() []history.Item
 	Add(it history.Item) string
 	UpdateResult(id string, result *history.Result, taskID string) bool
+	Delete(id string) bool
 	FindLatestUploadByPath(path string) *history.Item
 }
 
@@ -104,6 +105,27 @@ func (s *Server) handleHistoryUpdateResult(w http.ResponseWriter, r *http.Reques
 	}
 	ok := s.HistoryStore.UpdateResult(id, req.Result, req.TaskID)
 	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleHistoryDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.HistoryStore == nil {
+		http.Error(w, "history not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if !s.HistoryStore.Delete(id) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

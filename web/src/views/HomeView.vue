@@ -8,6 +8,7 @@ import {
   listHistory,
   createHistoryItem,
   updateHistoryResult as updateHistoryResultApi,
+  deleteHistoryItem,
   findLatestUploadHistoryId,
 } from '@/api/client'
 import type { ResultResponse, HistoryItem } from '@/api/client'
@@ -22,6 +23,7 @@ const explainLoading = ref(false)
 const explainError = ref('')
 const taskId = ref('')
 const result = ref<ResultResponse | null>(null)
+const resultSectionVisible = ref(true)
 const showLightbox = ref(false)
 const lightboxImage = ref('')
 
@@ -110,6 +112,7 @@ async function onStartExplain() {
     taskId.value = task_id
     const data = await getResult(task_id)
     result.value = data
+    resultSectionVisible.value = true
     await updateHistoryResult(historyId, data, task_id)
   } catch (err) {
     explainError.value = err instanceof Error ? err.message : '解析失败'
@@ -136,6 +139,7 @@ async function onStartExplainFromImage() {
     taskId.value = task_id
     const data = await getResult(task_id)
     result.value = data
+    resultSectionVisible.value = true
     await updateHistoryResult(historyId, data, task_id)
   } catch (err) {
     explainError.value = err instanceof Error ? err.message : '解析失败'
@@ -155,11 +159,13 @@ async function reparseItem(item: HistoryItem) {
       const { task_id } = await startExplainFromImage(item.path)
       const data = await getResult(task_id)
       result.value = data
+      resultSectionVisible.value = true
       await updateHistoryResult(item.id, data, task_id)
     } else if (item.type === 'text' && item.text) {
       const { task_id } = await startExplain(item.text)
       const data = await getResult(task_id)
       result.value = data
+      resultSectionVisible.value = true
       await updateHistoryResult(item.id, data, task_id)
     }
   } catch (err) {
@@ -170,7 +176,23 @@ async function reparseItem(item: HistoryItem) {
 }
 
 function showItemResult(item: HistoryItem) {
-  if (item.result?.steps?.length) result.value = item.result as ResultResponse
+  if (item.result?.steps?.length) {
+    result.value = item.result as ResultResponse
+    resultSectionVisible.value = true
+  }
+}
+
+function hideResultSection() {
+  resultSectionVisible.value = false
+}
+
+async function removeHistoryItem(item: HistoryItem) {
+  try {
+    await deleteHistoryItem(item.id)
+    history.value = await listHistory()
+  } catch {
+    // 删除失败可后续加提示
+  }
 }
 
 function formatTime(ms: number) {
@@ -233,7 +255,13 @@ function switchToText() {
         </p>
         <div v-else-if="uploadPath" class="success">
           <div class="upload-preview">
-            <img :src="uploadPreviewUrl" alt="题目图片预览" class="preview-img" />
+            <img
+              :src="uploadPreviewUrl"
+              alt="题目图片预览"
+              class="preview-img preview-img-clickable"
+              title="点击放大"
+              @click="openLightbox(uploadPreviewUrl)"
+            />
           </div>
           <p class="success-text">
             已上传题目图片，请点击
@@ -274,7 +302,13 @@ function switchToText() {
         <li v-for="item in history" :key="item.id" class="history-item">
           <div class="history-preview">
             <template v-if="item.type === 'upload' && item.path">
-              <img :src="`/api/uploads/${item.path}`" alt="题目" class="history-thumb" />
+              <img
+                :src="`/api/uploads/${item.path}`"
+                alt="题目"
+                class="history-thumb"
+                title="点击放大"
+                @click="openLightbox(`/api/uploads/${item.path}`)"
+              />
             </template>
             <template v-else-if="item.type === 'text' && item.text">
               <span class="history-text-preview">{{ item.text.slice(0, 60) }}{{ item.text.length > 60 ? '…' : '' }}</span>
@@ -303,6 +337,9 @@ function switchToText() {
             >
               {{ reparseLoadingId === item.id ? '解析中…' : '重新解析' }}
             </button>
+            <button type="button" class="btn-link danger" @click="removeHistoryItem(item)">
+              删除
+            </button>
           </div>
         </li>
       </ul>
@@ -312,8 +349,11 @@ function switchToText() {
       <p>正在生成步骤解析与配图，请稍候…</p>
     </section>
 
-    <section v-if="result?.steps?.length" class="result-section">
-      <h2>解析结果</h2>
+    <section v-if="resultSectionVisible && result?.steps?.length" class="result-section">
+      <div class="result-section-header">
+        <h2>解析结果</h2>
+        <button type="button" class="btn-link" @click="hideResultSection">收起</button>
+      </div>
       <nav class="step-nav">
         <a
           v-for="(step, i) in result.steps"
@@ -339,6 +379,7 @@ function switchToText() {
             :src="step.image_url"
             :alt="step.title"
             loading="lazy"
+            title="点击放大"
             @click="openLightbox(step.image_url!)"
           />
         </div>
@@ -358,8 +399,15 @@ function switchToText() {
   max-width: 800px;
 }
 .input-section h2,
-.result-section h2 {
-  margin-top: 0;
+.result-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.result-section-header h2 {
+  margin: 0;
   font-size: 1.25rem;
 }
 .tabs {
@@ -395,6 +443,9 @@ function switchToText() {
   border-radius: 8px;
   border: 1px solid #eee;
   object-fit: contain;
+}
+.upload-preview .preview-img-clickable {
+  cursor: pointer;
 }
 .text-area {
   margin-bottom: 1rem;
@@ -488,6 +539,7 @@ function switchToText() {
   object-fit: cover;
   border-radius: 6px;
   border: 1px solid #eee;
+  cursor: pointer;
 }
 .history-text-preview {
   display: block;
@@ -535,6 +587,12 @@ function switchToText() {
 .btn-link.primary {
   color: #333;
   font-weight: 500;
+}
+.btn-link.danger {
+  color: #c00;
+}
+.btn-link.danger:hover {
+  color: #a00;
 }
 .btn-link:disabled {
   opacity: 0.6;

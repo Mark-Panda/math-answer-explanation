@@ -132,6 +132,11 @@ export async function updateHistoryResult(
   if (!r.ok) throw new Error(await r.text() || '更新历史失败')
 }
 
+export async function deleteHistoryItem(id: string): Promise<void> {
+  const r = await fetch(`${BASE}/history/${id}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(await r.text() || '删除失败')
+}
+
 export async function findLatestUploadHistoryId(path: string): Promise<string | null> {
   const r = await fetch(`${BASE}/history/find-upload?path=${encodeURIComponent(path)}`)
   if (!r.ok) return null
