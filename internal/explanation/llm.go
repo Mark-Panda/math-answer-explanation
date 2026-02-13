@@ -30,6 +30,8 @@ func (g *Generator) GenerateFromImage(ctx context.Context, imagePath string) (*R
 	if g.cfg.Provider != "openai" {
 		return generateStub("")
 	}
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.Timeout())
+	defer cancel()
 	data, mime, err := readImageAsBase64(imagePath)
 	if err != nil {
 		return nil, fmt.Errorf("read image: %w", err)
@@ -93,6 +95,8 @@ func (g *Generator) Generate(ctx context.Context, problemText string) (*Result, 
 	if g.cfg.Provider != "openai" {
 		return generateStub(problemText)
 	}
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.Timeout())
+	defer cancel()
 	opts := []openai.Option{
 		openai.WithToken(g.cfg.APIKey()),
 		openai.WithModel(g.cfg.Model),

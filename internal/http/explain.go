@@ -3,8 +3,11 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gomath/gomath/internal/explanation"
@@ -76,7 +79,14 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		result, err = s.ExplainGen.Generate(r.Context(), req.ProblemText)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[explain] error: %v", err)
+		msg := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) {
+			msg = "解析超时，请稍后重试或调大 config 中 llm.explanation.timeout_sec"
+		} else if strings.Contains(msg, "504") {
+			msg = "上游模型/网关返回 504 超时（约 60 秒），请检查网关超时配置或稍后重试"
+		}
+		http.Error(w, msg, http.StatusInternalServerError)
 		return
 	}
 	// 若配置了讲解图生成，按步骤生成并绑定 URL

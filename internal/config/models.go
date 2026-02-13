@@ -54,9 +54,10 @@ type LLMExplanationConfig struct {
 	Model             string  `yaml:"model"`
 	APIBase           string  `yaml:"api_base"`
 	APIKeyValue       string  `yaml:"api_key"`      // 优先使用：直接从配置文件读取
-	APIKeyEnv         string  `yaml:"api_key_env"`  // 可选：api_key 为空时从该环境变量读取
+	APIKeyEnv         string  `yaml:"api_key_env"`   // 可选：api_key 为空时从该环境变量读取
 	Temperature       float64 `yaml:"temperature"`
 	MaxTokens         int     `yaml:"max_tokens"`
+	TimeoutSec        int     `yaml:"timeout_sec"`   // 单次解析请求超时（秒），≤0 时默认 180
 	SystemPromptFile  string  `yaml:"system_prompt_file"`
 }
 
@@ -69,6 +70,14 @@ func (c LLMExplanationConfig) APIKey() string {
 		return os.Getenv(c.APIKeyEnv)
 	}
 	return ""
+}
+
+// Timeout 返回解析请求超时时间；≤0 时默认 180 秒（多模态/长文本可能较慢）。
+func (c LLMExplanationConfig) Timeout() time.Duration {
+	if c.TimeoutSec <= 0 {
+		return 180 * time.Second
+	}
+	return time.Duration(c.TimeoutSec) * time.Second
 }
 
 // VideoConfig 视频生成配置（Phase 2 后续待办）

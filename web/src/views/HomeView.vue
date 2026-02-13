@@ -1,79 +1,186 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { uploadImage, submitImage, startExplain, startExplainFromImage, getResult } from '@/api/client'
+import { ref, computed, onMounted } from 'vue'
+import {
+  uploadImage,
+  startExplain,
+  startExplainFromImage,
+  getResult,
+  listHistory,
+  createHistoryItem,
+  updateHistoryResult as updateHistoryResultApi,
+  findLatestUploadHistoryId,
+} from '@/api/client'
+import type { ResultResponse, HistoryItem } from '@/api/client'
 import KaTeXRender from '@/components/KaTeXRender.vue'
 
 const mode = ref<'upload' | 'text'>('text')
 const problemText = ref('')
 const uploadPath = ref('')
 const uploadError = ref('')
-const recognizeLoading = ref(false)
+const uploadLoading = ref(false)
 const explainLoading = ref(false)
 const explainError = ref('')
 const taskId = ref('')
-const result = ref<{ steps: { title: string; content: string; image_url?: string }[] } | null>(null)
+const result = ref<ResultResponse | null>(null)
 const showLightbox = ref(false)
 const lightboxImage = ref('')
 
+const history = ref<HistoryItem[]>([])
+const currentResolvingId = ref<string | null>(null)
+const reparseLoadingId = ref<string | null>(null)
+const lastUploadHistoryId = ref<string | null>(null)
+
 const canStartExplain = computed(() => problemText.value.trim().length > 0)
 const canStartExplainFromImage = computed(() => uploadPath.value.length > 0)
+const uploadPreviewUrl = computed(() =>
+  uploadPath.value ? `/api/uploads/${uploadPath.value}` : ''
+)
+
+onMounted(async () => {
+  try {
+    history.value = await listHistory()
+  } catch {
+    history.value = []
+  }
+})
+
+async function addUploadToHistory(path: string): Promise<string> {
+  const at = Date.now()
+  const { id } = await createHistoryItem({ type: 'upload', path, at })
+  lastUploadHistoryId.value = id
+  const newItem: HistoryItem = { id, type: 'upload', path, at }
+  history.value = [newItem, ...history.value]
+  try {
+    const list = await listHistory()
+    if (list.length) history.value = list
+  } catch {
+    // 保留上面的乐观更新，列表已有新记录
+  }
+  return id
+}
+
+async function addTextToHistory(text: string): Promise<string> {
+  const at = Date.now()
+  const { id } = await createHistoryItem({ type: 'text', text, at })
+  const newItem: HistoryItem = { id, type: 'text', text, at }
+  history.value = [newItem, ...history.value]
+  try {
+    const list = await listHistory()
+    if (list.length) history.value = list
+  } catch {
+    // 保留乐观更新
+  }
+  return id
+}
+
+async function updateHistoryResult(id: string, data: ResultResponse, taskIdVal: string) {
+  await updateHistoryResultApi(id, data, taskIdVal)
+  history.value = await listHistory()
+}
 
 async function onFileSelect(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
   uploadError.value = ''
-  recognizeLoading.value = true
+  uploadLoading.value = true
   try {
     const { path } = await uploadImage(file)
     uploadPath.value = path
-    const { problem_text } = await submitImage(path)
-    problemText.value = problem_text
+    await addUploadToHistory(path)
   } catch (err) {
-    uploadError.value = err instanceof Error ? err.message : '上传或识图失败'
+    uploadError.value = err instanceof Error ? err.message : '上传失败'
   } finally {
-    recognizeLoading.value = false
+    uploadLoading.value = false
     input.value = ''
   }
 }
 
 async function onStartExplain() {
   if (!canStartExplain.value) return
+  const text = problemText.value.trim()
   explainError.value = ''
   explainLoading.value = true
   result.value = null
   taskId.value = ''
+  const historyId = await addTextToHistory(text)
+  currentResolvingId.value = historyId
   try {
-    const { task_id } = await startExplain(problemText.value)
+    const { task_id } = await startExplain(text)
     taskId.value = task_id
-    await pollResult(task_id)
+    const data = await getResult(task_id)
+    result.value = data
+    await updateHistoryResult(historyId, data, task_id)
   } catch (err) {
     explainError.value = err instanceof Error ? err.message : '解析失败'
   } finally {
     explainLoading.value = false
+    currentResolvingId.value = null
   }
 }
 
 async function onStartExplainFromImage() {
   if (!canStartExplainFromImage.value) return
+  const path = uploadPath.value
+  let historyId = lastUploadHistoryId.value
+  if (!historyId) {
+    historyId = (await findLatestUploadHistoryId(path)) ?? (await addUploadToHistory(path))
+  }
   explainError.value = ''
   explainLoading.value = true
   result.value = null
   taskId.value = ''
+  currentResolvingId.value = historyId
   try {
-    const { task_id } = await startExplainFromImage(uploadPath.value)
+    const { task_id } = await startExplainFromImage(path)
     taskId.value = task_id
-    await pollResult(task_id)
+    const data = await getResult(task_id)
+    result.value = data
+    await updateHistoryResult(historyId, data, task_id)
   } catch (err) {
     explainError.value = err instanceof Error ? err.message : '解析失败'
   } finally {
     explainLoading.value = false
+    currentResolvingId.value = null
   }
 }
 
-async function pollResult(id: string) {
-  const data = await getResult(id)
-  result.value = data
+async function reparseItem(item: HistoryItem) {
+  if (reparseLoadingId.value) return
+  reparseLoadingId.value = item.id
+  explainError.value = ''
+  result.value = null
+  try {
+    if (item.type === 'upload' && item.path) {
+      const { task_id } = await startExplainFromImage(item.path)
+      const data = await getResult(task_id)
+      result.value = data
+      await updateHistoryResult(item.id, data, task_id)
+    } else if (item.type === 'text' && item.text) {
+      const { task_id } = await startExplain(item.text)
+      const data = await getResult(task_id)
+      result.value = data
+      await updateHistoryResult(item.id, data, task_id)
+    }
+  } catch (err) {
+    explainError.value = err instanceof Error ? err.message : '重新解析失败'
+  } finally {
+    reparseLoadingId.value = null
+  }
+}
+
+function showItemResult(item: HistoryItem) {
+  if (item.result?.steps?.length) result.value = item.result as ResultResponse
+}
+
+function formatTime(ms: number) {
+  const d = new Date(ms)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterday = new Date(today.getTime() - 86400000)
+  if (d >= today) return '今天 ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  if (d >= yesterday) return '昨天 ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
 function openLightbox(url: string) {
@@ -116,32 +223,37 @@ function switchToText() {
         <input
           type="file"
           accept="image/jpeg,image/png,image/webp"
-          :disabled="recognizeLoading"
+          :disabled="uploadLoading"
           @change="onFileSelect"
         />
-        <p v-if="recognizeLoading" class="loading">正在识别题目…</p>
+        <p v-if="uploadLoading" class="loading">正在上传…</p>
         <p v-else-if="uploadError" class="error">
           {{ uploadError }}
           <button type="button" class="link" @click="switchToText">改为输入文字</button>
         </p>
-        <p v-else-if="uploadPath" class="success">
-          已上传，识别结果如下可编辑；或
-          <button
-            type="button"
-            class="link primary-inline"
-            :disabled="explainLoading"
-            @click="onStartExplainFromImage"
-          >
-            {{ explainLoading ? '解析中…' : '直接解析' }}
-          </button>
-          让模型看图解析（不经过 OCR）。
-        </p>
+        <div v-else-if="uploadPath" class="success">
+          <div class="upload-preview">
+            <img :src="uploadPreviewUrl" alt="题目图片预览" class="preview-img" />
+          </div>
+          <p class="success-text">
+            已上传题目图片，请点击
+            <button
+              type="button"
+              class="link primary-inline"
+              :disabled="explainLoading"
+              @click="onStartExplainFromImage"
+            >
+              {{ explainLoading ? '解析中…' : '确认解析' }}
+            </button>
+            ，由多模态大模型看图解析。
+          </p>
+        </div>
       </div>
 
-      <div class="text-area">
+      <div v-if="mode === 'text'" class="text-area">
         <textarea
           v-model="problemText"
-          placeholder="输入或粘贴题目内容（上传图片后此处为识别结果，可编辑）"
+          placeholder="输入或粘贴题目内容，点击下方「确认解析」由多模态大模型解析"
           rows="5"
         />
         <button
@@ -150,10 +262,50 @@ function switchToText() {
           :disabled="!canStartExplain || explainLoading"
           @click="onStartExplain"
         >
-          {{ explainLoading ? '解析中…' : '开始解析' }}
+          {{ explainLoading ? '解析中…' : '确认解析' }}
         </button>
       </div>
-      <p v-if="explainError" class="error">{{ explainError }} 可修改题目后重试。</p>
+      <p v-if="explainError" class="error">{{ explainError }} 可修改后重试。</p>
+    </section>
+
+    <section v-if="history.length" class="history-section">
+      <h2>解析历史</h2>
+      <ul class="history-list">
+        <li v-for="item in history" :key="item.id" class="history-item">
+          <div class="history-preview">
+            <template v-if="item.type === 'upload' && item.path">
+              <img :src="`/api/uploads/${item.path}`" alt="题目" class="history-thumb" />
+            </template>
+            <template v-else-if="item.type === 'text' && item.text">
+              <span class="history-text-preview">{{ item.text.slice(0, 60) }}{{ item.text.length > 60 ? '…' : '' }}</span>
+            </template>
+          </div>
+          <div class="history-meta">
+            <span class="history-type">{{ item.type === 'upload' ? '图片' : '文字' }}</span>
+            <span class="history-time">{{ formatTime(item.at) }}</span>
+            <span v-if="item.result?.steps?.length" class="history-steps">共 {{ item.result.steps.length }} 步</span>
+            <span v-else class="history-no-result">未解析</span>
+          </div>
+          <div class="history-actions">
+            <button
+              v-if="item.result?.steps?.length"
+              type="button"
+              class="btn-link"
+              @click="showItemResult(item)"
+            >
+              查看
+            </button>
+            <button
+              type="button"
+              class="btn-link primary"
+              :disabled="reparseLoadingId !== null"
+              @click="reparseItem(item)"
+            >
+              {{ reparseLoadingId === item.id ? '解析中…' : '重新解析' }}
+            </button>
+          </div>
+        </li>
+      </ul>
     </section>
 
     <section v-if="explainLoading && !result" class="loading-section">
@@ -233,6 +385,17 @@ function switchToText() {
 .upload-area input[type='file'] {
   margin-bottom: 0.5rem;
 }
+.upload-preview {
+  margin-bottom: 0.75rem;
+}
+.upload-preview .preview-img {
+  max-width: 100%;
+  max-height: 280px;
+  display: block;
+  border-radius: 8px;
+  border: 1px solid #eee;
+  object-fit: contain;
+}
 .text-area {
   margin-bottom: 1rem;
 }
@@ -262,6 +425,9 @@ function switchToText() {
   color: #666;
   font-size: 0.9rem;
 }
+.success-text {
+  margin: 0;
+}
 .error {
   color: #c00;
   font-size: 0.9rem;
@@ -289,6 +455,92 @@ function switchToText() {
   opacity: 0.6;
   cursor: not-allowed;
 }
+.history-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #eee;
+}
+.history-section h2 {
+  margin-top: 0;
+  font-size: 1.25rem;
+}
+.history-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.history-item:last-child {
+  border-bottom: none;
+}
+.history-preview {
+  flex-shrink: 0;
+}
+.history-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #eee;
+}
+.history-text-preview {
+  display: block;
+  width: 120px;
+  font-size: 0.85rem;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-meta {
+  flex: 1;
+  font-size: 0.85rem;
+  color: #666;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.history-type {
+  padding: 0.1rem 0.4rem;
+  background: #f0f0f0;
+  border-radius: 4px;
+}
+.history-steps {
+  color: #0a0;
+}
+.history-no-result {
+  color: #999;
+}
+.history-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.btn-link {
+  background: none;
+  border: none;
+  color: #06c;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0.25rem 0.5rem;
+}
+.btn-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.btn-link.primary {
+  color: #333;
+  font-weight: 500;
+}
+.btn-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .loading-section {
   padding: 2rem;
   text-align: center;

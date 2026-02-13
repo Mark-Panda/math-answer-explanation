@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
@@ -87,4 +88,50 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(UploadResponse{Path: name})
+}
+
+// handleServeUpload 提供已上传图片的访问，用于前端预览；filename 仅允许单级路径（无 / 与 ..）
+func (s *Server) handleServeUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	filename := chi.URLParam(r, "filename")
+	if filename == "" || strings.Contains(filename, "..") || strings.ContainsRune(filename, '/') {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	absPath := filepath.Join(s.UploadDir, filename)
+	// 确保解析后的路径仍在 UploadDir 内，防止路径穿越
+	uploadDirAbs, _ := filepath.Abs(s.UploadDir)
+	absPath, _ = filepath.Abs(absPath)
+	sep := string(filepath.Separator)
+	if absPath != uploadDirAbs && !strings.HasPrefix(absPath, uploadDirAbs+sep) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	ct := "image/jpeg"
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".png":
+		ct = "image/png"
+	case ".webp":
+		ct = "image/webp"
+	}
+	w.Header().Set("Content-Type", ct)
+	http.ServeContent(w, r, filename, info.ModTime(), f)
 }

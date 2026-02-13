@@ -22,10 +22,11 @@ type Server struct {
 	ExplainGen   ExplainGenerator    // 可选
 	ExplainStore ExplainStore        // 可选
 	ImageGen     StepImageGenerator  // 可选，为每步生成讲解图
+	HistoryStore HistoryStore       // 可选，解析历史
 }
 
-// NewServer 创建 HTTP 服务，uploadDir 为图片落盘目录，maxSizeMB 为单文件最大 MB；ocr/gen/store/imageGen 可为 nil
-func NewServer(uploadDir string, maxSizeMB int, ocr OCRRecognizer, explainGen ExplainGenerator, explainStore ExplainStore, imageGen StepImageGenerator) *Server {
+// NewServer 创建 HTTP 服务，uploadDir 为图片落盘目录，maxSizeMB 为单文件最大 MB；ocr/gen/store/imageGen/historyStore 可为 nil
+func NewServer(uploadDir string, maxSizeMB int, ocr OCRRecognizer, explainGen ExplainGenerator, explainStore ExplainStore, imageGen StepImageGenerator, historyStore HistoryStore) *Server {
 	if maxSizeMB <= 0 {
 		maxSizeMB = 10
 	}
@@ -37,13 +38,19 @@ func NewServer(uploadDir string, maxSizeMB int, ocr OCRRecognizer, explainGen Ex
 		ExplainGen:   explainGen,
 		ExplainStore: explainStore,
 		ImageGen:     imageGen,
+		HistoryStore: historyStore,
 	}
 	s.Router.Use(middleware.Logger, middleware.Recoverer)
 	s.Router.Route("/api", func(r chi.Router) {
 		r.Post("/upload", s.handleUpload)
+		r.Get("/uploads/{filename}", s.handleServeUpload)
 		r.Post("/submit", s.handleSubmit)
 		r.Post("/explain", s.handleExplain)
 		r.Get("/result/{id}", s.handleResult)
+		r.Get("/history/find-upload", s.handleHistoryFindLatestUpload)
+		r.Get("/history", s.handleHistoryList)
+		r.Post("/history", s.handleHistoryCreate)
+		r.Patch("/history/{id}", s.handleHistoryUpdateResult)
 	})
 	return s
 }

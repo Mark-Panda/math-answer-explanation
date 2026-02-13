@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gomath/gomath/internal/config"
 	"github.com/gomath/gomath/internal/explanation"
+	"github.com/gomath/gomath/internal/history"
 	"github.com/gomath/gomath/internal/http"
 	"github.com/gomath/gomath/internal/ocr"
 )
@@ -31,7 +33,23 @@ func main() {
 	if uploadDir == "" {
 		uploadDir = "uploads"
 	}
-	srv := http.NewServer(uploadDir, 10, ocrSvc, explainGen, explainStore, imageGen)
+	historyFilePath := os.Getenv("GOMATH_HISTORY_FILE")
+	if historyFilePath == "" {
+		historyFilePath = filepath.Join(uploadDir, "..", "data", "history.json")
+	}
+	historyAbsPath, err := filepath.Abs(historyFilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "history path: %v\n", err)
+		os.Exit(1)
+	}
+	historyStore, err := history.NewStore(historyAbsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "history store: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("history file:", historyAbsPath)
+
+	srv := http.NewServer(uploadDir, 10, ocrSvc, explainGen, explainStore, imageGen, historyStore)
 	addr := os.Getenv("GOMATH_ADDR")
 	if addr == "" {
 		addr = ":8080"
